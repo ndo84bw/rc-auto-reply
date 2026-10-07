@@ -2,9 +2,12 @@ import { IHttp, IModify, IPersistence, IRead } from "@rocket.chat/apps-engine/de
 import { IMessage, IMessageAttachment, MessageActionButtonsAlignment, MessageActionType } from "@rocket.chat/apps-engine/definition/messages";
 import { AutoReplyApp } from "../../AutoReplyApp";
 import { IUser } from "@rocket.chat/apps-engine/definition/users";
-import { getAutoReplySettings, sendMessage, sendNotifyMessage } from "../utils/helpers";
+import { sendMessage, sendNotifyMessage } from "../utils/helpers";
+import { readOutOfOffice } from "../store";
+import { isActive } from "../outOfOffice/period";
+import { IOutOfOffice } from "../outOfOffice/types";
 import { readLastReplies, saveLastReply } from "../utils/lastReplies";
-import { IAutoReplySettings, IReplyFrequency } from "../utils/IAutoReplySettings";
+import { IReplyFrequency } from "../utils/IAutoReplySettings";
 
 export class PostMessageSentHandler{
     constructor(
@@ -20,18 +23,18 @@ export class PostMessageSentHandler{
         const botUser = await this.getBotUser();
         if (this.isSentByBot(botUser)) return;
     
+        const now = Date.now();
         const me = this.message.sender;
-        const MyAutoReplySettings = await getAutoReplySettings(me.id, this.read);
-    
         const otherUser = await this.getOtherUserInRoom();
         if (!otherUser) return;
     
-        if (MyAutoReplySettings.on) {
+        const MyAutoReplySettings = await readOutOfOffice(me.id, this.read, me.utcOffset);
+        if (isActive(MyAutoReplySettings, now)) {
             await this.handleMyAutoReply(MyAutoReplySettings, otherUser.id);
         }
     
-        const OtherAutoReplySettings = await getAutoReplySettings(otherUser.id, this.read);
-        if (OtherAutoReplySettings.on) {
+        const OtherAutoReplySettings = await readOutOfOffice(otherUser.id, this.read, otherUser.utcOffset);
+        if (isActive(OtherAutoReplySettings, now)) {
             await this.handleOtherUserAutoReply(OtherAutoReplySettings, otherUser, me);
         }
     }
@@ -54,8 +57,8 @@ export class PostMessageSentHandler{
         return await this.read.getUserReader().getById(otherUserId);
     }
     
-    private async handleMyAutoReply(MyAutoReplySettings: IAutoReplySettings, otherUserId: string): Promise<void> {
-        if (MyAutoReplySettings.users?.some(user => user.id === otherUserId)) return;
+    private async handleMyAutoReply(MyAutoReplySettings: IOutOfOffice, otherUserId: string): Promise<void> {
+        if (MyAutoReplySettings.excludedUserIds.includes(otherUserId)) return;
     
         const text = '`auto reply` is enabled. Would you like to disable it?';
         const attachment = this.getMyAutoReplyAttachment(otherUserId);
@@ -100,8 +103,8 @@ export class PostMessageSentHandler{
         };
     }
     
-    private async handleOtherUserAutoReply(OtherAutoReplySettings: IAutoReplySettings, otherUser: IUser, me: IUser): Promise<void> {
-        if (OtherAutoReplySettings.users?.some(user => user.id === me.id)) return;
+    private async handleOtherUserAutoReply(OtherAutoReplySettings: IOutOfOffice, otherUser: IUser, me: IUser): Promise<void> {
+        if (OtherAutoReplySettings.excludedUserIds.includes(me.id)) return;
     
         const OtherreplyFrequency = OtherAutoReplySettings.replyFrequency;
         if (OtherreplyFrequency !== String(IReplyFrequency.OnEveryMessage)) {

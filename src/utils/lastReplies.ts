@@ -1,10 +1,12 @@
 import { IPersistence, IRead } from '@rocket.chat/apps-engine/definition/accessors';
 import { RocketChatAssociationModel, RocketChatAssociationRecord } from '@rocket.chat/apps-engine/definition/metadata';
 
-import { IAutoReplySettings, IUsersLastReply } from './IAutoReplySettings';
+import { isActive } from '../outOfOffice/period';
+import { IOutOfOffice } from '../outOfOffice/types';
+import { IUsersLastReply } from './IAutoReplySettings';
 
 // Kept apart from the settings, so a reply never overwrites settings changed at the same time.
-// Deliberately not associated with the user: getAutoReplySettings reads everything associated with the user.
+// Deliberately not associated with the user: readOutOfOffice reads everything associated with the user.
 const association = (userId: string) => new RocketChatAssociationRecord(RocketChatAssociationModel.MISC, `last-replies:${userId}`);
 
 export async function readLastReplies(userId: string, read: IRead): Promise<IUsersLastReply[]> {
@@ -18,9 +20,15 @@ export async function saveLastReply(userId: string, senderId: string, read: IRea
     await persis.updateByAssociation(association(userId), { replies }, true);
 }
 
-/** The reply frequency counts from the moment auto-reply gets switched on, so everyone gets a reply again after it was off */
-export async function resetLastRepliesOnSwitch(userId: string, previousSettings: IAutoReplySettings, on: boolean, persis: IPersistence): Promise<void> {
-    if (on && !previousSettings.on) {
+/**
+ * The reply frequency counts per absence: switching on or setting another period lets everyone get
+ * a reply again, but changing a period that is running and keeps running continues the absence.
+ */
+export async function resetLastRepliesForNewAbsence(userId: string, previous: IOutOfOffice, next: IOutOfOffice, persis: IPersistence): Promise<void> {
+    const now = Date.now();
+    const samePeriod = JSON.stringify([previous.start, previous.end]) === JSON.stringify([next.start, next.end]);
+    const continuing = isActive(previous, now) && isActive(next, now);
+    if (next.enabled && !continuing && (!previous.enabled || !samePeriod)) {
         await persis.removeByAssociation(association(userId));
     }
 }

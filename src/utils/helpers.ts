@@ -5,24 +5,8 @@ import { BlockBuilder } from '@rocket.chat/apps-engine/definition/uikit';
 import { IUser } from '@rocket.chat/apps-engine/definition/users';
 
 import { AutoReplyApp } from '../../AutoReplyApp';
-import { RocketChatAssociationModel, RocketChatAssociationRecord } from '@rocket.chat/apps-engine/definition/metadata';
-import { IAutoReplySettings, IReplyFrequency } from './IAutoReplySettings';
 
 
-
-export async function getAutoReplySettings(userId: string, read: IRead): Promise<IAutoReplySettings> {
-    const assocMe = new RocketChatAssociationRecord(RocketChatAssociationModel.USER, userId);
-    const autoReplySettingsAssoc = await read.getPersistenceReader().readByAssociation(assocMe);
-    const autoReplySettings = autoReplySettingsAssoc[0] as IAutoReplySettings | undefined;
-    return {
-        on: autoReplySettings?.on ?? false,
-        message: autoReplySettings?.message || 'Hey, I received your message and will get back to you as soon as possible.',
-        users: autoReplySettings?.users ?? [],
-        // 2.x stored an unused list here
-        schedulers: Array.isArray(autoReplySettings?.schedulers) ? undefined : autoReplySettings?.schedulers,
-        replyFrequency: autoReplySettings?.replyFrequency ?? String(IReplyFrequency.OnEveryMessage),
-    };
-}
 
 /** Must match the id in app.json, UI elements carry it to route interactions back to this app */
 export const APP_ID = '821cd5c6-1fb5-4d9e-8e88-e6176463efb6';

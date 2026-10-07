@@ -1,10 +1,10 @@
 import { IHttp, IModify, IPersistence, IRead } from '@rocket.chat/apps-engine/definition/accessors';
-import { RocketChatAssociationModel, RocketChatAssociationRecord } from '@rocket.chat/apps-engine/definition/metadata';
 import { ISlashCommand, SlashCommandContext } from '@rocket.chat/apps-engine/definition/slashcommands';
 
-import { IAutoReplySettings } from './utils/IAutoReplySettings';
-import { getAutoReplySettings, sendNotifyMessage } from './utils/helpers';
-import { resetLastRepliesOnSwitch } from './utils/lastReplies';
+import { statusText } from './outOfOffice/period';
+import { IOutOfOffice } from './outOfOffice/types';
+import { readOutOfOffice, saveOutOfOffice } from './store';
+import { sendNotifyMessage } from './utils/helpers';
 
 export class SlashCommand implements ISlashCommand {
     public command = 'auto-reply';
@@ -14,99 +14,36 @@ export class SlashCommand implements ISlashCommand {
 
     public async executor(context: SlashCommandContext, read: IRead, modify: IModify, http: IHttp, persis: IPersistence): Promise<void> {
         const args = context.getArguments();
+        const sender = context.getSender();
+        const notify = (text: string) => sendNotifyMessage(undefined, modify, context.getRoom(), sender, text);
+        const previous = await readOutOfOffice(sender.id, read, sender.utcOffset);
+        const save = (next: IOutOfOffice) => saveOutOfOffice(sender.id, previous, next, persis);
+        const status = (settings: IOutOfOffice) => `${statusText(settings, Date.now())}\n>${settings.message}`;
 
-        if (args.length === 0) {
-            await this.handleInvalidUsage(context, modify);
-        } else {
-            const action = args[0].toLowerCase();
-            switch (action) {
-                case 'disable':
-                case 'status':
-                    await this.handleStatusAction(context, read, modify, persis);
-                    break;
-                case 'remove-user':
-                    await this.handleRemoveUserAction(context, read, modify, persis);
-                    break;
-                case 'enable':
-                    await this.handleEnableAction(context, read, modify, persis);
-                    break;
-                default:
-                    await this.handleInvalidAction(context, modify);
+        switch ((args[0] ?? '').toLowerCase()) {
+            case 'enable': {
+                const next: IOutOfOffice = { ...previous, enabled: true, start: undefined, message: args.slice(1).join(' ') || previous.message };
+                await save(next);
+                return notify('`auto reply` is enabled: ' + status(next));
             }
-        }
-    }
-
-    private async handleInvalidUsage(context: SlashCommandContext, modify: IModify): Promise<void> {
-        await sendNotifyMessage(undefined, modify, context.getRoom(), context.getSender(), 'Invalid usage of the auto-reply command. ' +
-            'Please provide `enable`, `remove-user` or `disable`, with the message optional if you are away.');
-    }
-
-    private async handleStatusAction(context: SlashCommandContext, read: IRead, modify: IModify, persis: IPersistence): Promise<void> {
-        const assoc = new RocketChatAssociationRecord(RocketChatAssociationModel.USER, context.getSender().id);
-        const previousSettings = await getAutoReplySettings(context.getSender().id, read);
-
-        if (context.getArguments()[0].toLowerCase() === 'disable') {
-            const autoReplySettings: IAutoReplySettings = {
-                ...previousSettings,
-                on: false,
-            };
-            await persis.updateByAssociation(assoc, autoReplySettings, true);
-            await sendNotifyMessage(undefined, modify, context.getRoom(), context.getSender(), '`auto reply` is disabled, ' + context.getSender().username + ' !');
-        } else {
-            if (previousSettings.on) {
-                await sendNotifyMessage(undefined, modify, context.getRoom(), context.getSender(), '`auto reply` is enabled, with the following message:\n>' + previousSettings.message);
-            } else {
-                await sendNotifyMessage(undefined, modify, context.getRoom(), context.getSender(), '`auto reply` is disabled.');
+            case 'disable': {
+                const next: IOutOfOffice = { ...previous, enabled: false };
+                await save(next);
+                return notify('`auto reply` is disabled.');
             }
+            case 'status':
+                return notify('`auto reply`: ' + status(previous));
+            case 'remove-user': {
+                const user = args[1] ? await read.getUserReader().getById(args[1]) : undefined;
+                if (!user) {
+                    return notify('usage: `/auto-reply remove-user UserId`');
+                }
+                const next: IOutOfOffice = { ...previous, excludedUserIds: [...new Set([...previous.excludedUserIds, user.id])] };
+                await save(next);
+                return notify('`auto reply` is disabled for: @' + user.username);
+            }
+            default:
+                return notify('Only `enable`, `disable`, `remove-user` and `status` are accepted options for the first argument.');
         }
-    }
-
-    private async handleRemoveUserAction(context: SlashCommandContext, read: IRead, modify: IModify, persis: IPersistence): Promise<void> {
-        const args = context.getArguments();
-        if (args.length < 2) {
-            await sendNotifyMessage(undefined, modify, context.getRoom(), context.getSender(), 'usage: `/auto-reply remove-user UserId`');
-            return;
-        }
-
-        const assoc = new RocketChatAssociationRecord(RocketChatAssociationModel.USER, context.getSender().id);
-        const previousSettings = await getAutoReplySettings(context.getSender().id, read);
-        const user = await read.getUserReader().getById(args[1]);
-
-        const userIndex = previousSettings.users?.findIndex(u => u.id === user.id);
-        if (userIndex === -1) {
-            previousSettings.users?.push(user);
-        }
-
-        const autoReplySettings: IAutoReplySettings = {
-            ...previousSettings,
-            on: true,
-        };
-        await resetLastRepliesOnSwitch(context.getSender().id, previousSettings, true, persis);
-        await persis.updateByAssociation(assoc, autoReplySettings, true);
-
-        await sendNotifyMessage(undefined, modify, context.getRoom(), context.getSender(), '`auto reply` is disabled for: @' + user.username);
-    }
-
-    private async handleEnableAction(context: SlashCommandContext, read: IRead, modify: IModify, persis: IPersistence): Promise<void> {
-        const assoc = new RocketChatAssociationRecord(RocketChatAssociationModel.USER, context.getSender().id);
-        const previousSettings = await getAutoReplySettings(context.getSender().id, read);
-        const args = context.getArguments();
-        args.splice(0, 1); // Removing the action
-
-        const autoReplySettings: IAutoReplySettings = {
-            ...previousSettings,
-            on: true,
-            message: args.join(' ') || previousSettings.message,
-        };
-
-        await resetLastRepliesOnSwitch(context.getSender().id, previousSettings, true, persis);
-        await persis.updateByAssociation(assoc, autoReplySettings, true);
-
-        await sendNotifyMessage(undefined, modify, context.getRoom(), context.getSender(), '`auto reply` is enabled, with the following message:\n>' + autoReplySettings.message);
-    }
-
-    private async handleInvalidAction(context: SlashCommandContext, modify: IModify): Promise<void> {
-        await sendNotifyMessage(undefined, modify, context.getRoom(), context.getSender(), 'No idea what you are talking about. ' +
-            'Only `enable`, `disable`, `remove-user` and `status` are accepted options for the first argument.');
     }
 }
