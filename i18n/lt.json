@@ -1,4 +1,5 @@
 {
     "auto-reply-param-example": "[on <Jūsų žinutė čia (neprivaloma)> | off | status]",
-    "auto-reply-description": "Automatinis atsakymas leidžia vartotojams automatiškai siųsti tinkintus pranešimus atsakant į gaunamus tekstus"
+    "auto-reply-description": "Automatinis atsakymas leidžia vartotojams automatiškai siųsti tinkintus pranešimus atsakant į gaunamus tekstus",
+    "out-of-office-menu": "Out of Office"
 }

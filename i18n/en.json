@@ -1,5 +1,5 @@
 {
     "auto-reply-param-example": "[on <Your away message (optional)> | off | status]",
-    "auto-reply-description": "Auto-reply allows users to automatically send customized messages in response to incoming texts",
+    "auto-reply-description": "Automatically replies to direct messages while you are out of office",
     "out-of-office-menu": "Out of Office"
 }

@@ -3,27 +3,46 @@
 
 ## Features
 
-- Automatically send customized messages in response to incoming texts.
-- Users can set up personalized auto-responses to ensure that their contacts receive a prompt reply.
-- Can exclude users from getting the auto-reply message 
+- Automatically replies to direct messages while you are away, with your own message.
+- One out of office period from a first to a last day, each with an optional time. Without a time the whole day counts.
+- Replies only while switched on and inside the period, so a period can be prepared ahead and stays saved when switched off.
+- Reply on every message, once per person, or at most once per hour, day, week or month.
+- People who should never get the reply.
+- Replies in the thread the message was written in.
 
 
 ## How to use it
 
-From any direct-message contextual action menu, click auto-reply button:
->![image](https://user-images.githubusercontent.com/29951360/220590790-fe8e20be-4ef4-4903-9341-db014a46bc09.png) 
+Open your user menu (your avatar) and choose **Out of Office**. The dialog shows the current status, for example "Active until Fri, Oct 17" or "Off. When enabled: Mon, Oct 13 - Fri, Oct 17".
 
-Enable the app:
->![image](https://user-images.githubusercontent.com/29951360/220591129-e3d5bad5-aec8-4878-9e9b-38f4ba4afb1e.png)
+- **Enabled** switches the out of office reply on or off.
+- **First day** and **Last day** set the period. Leave the first day empty to start right away and the last day empty to keep it on until you switch it off. Times are optional and in your current UTC offset.
+- **Message**, **Reply** (how often) and **Never reply to** set what is sent and to whom.
 
-Customize your message and submit:
->![image](https://user-images.githubusercontent.com/29951360/220591361-102a9950-6694-4baa-8875-2009a3474a39.png)
+**Save** checks the input and shows the saved status.
 
-When someone send you a message he will get an auto-reply:
->![image](https://user-images.githubusercontent.com/29951360/220594523-c54ac5d2-98d1-4732-975f-44fca6aa3815.png)
+When you write a direct message while your out of office reply is active, you get a hint once a day per conversation, with buttons to turn it off, not to reply to that person, or to open the settings.
 
-if you texted a user when your auto-reply is enabled, you will get options to disable auto-reply:
->![image](https://user-images.githubusercontent.com/29951360/220594822-f7720df6-5b9b-4473-9b4a-1c3fee83fe3e.png)
+The slash command is a shortcut:
+
+| Command | |
+|---|---|
+| `/auto-reply` | opens the dialog |
+| `/auto-reply on [message]` | switches on from now, optionally with a new message |
+| `/auto-reply off` | switches off, the period stays saved |
+| `/auto-reply status` | shows the status |
+
+### Limitations
+
+- Only direct messages between two people get a reply.
+- Encrypted (E2EE) direct messages get no reply: Rocket.Chat does not pass them to apps as regular messages, and the app could not read them.
+- Rocket.Chat only knows the UTC offset of your last login, not your time zone. A switch to or from daylight saving time before the period moves its start and end by an hour.
+
+### Upgrading from 2.x
+
+Settings saved by 2.x keep working: an enabled auto-reply stays on without a period, and the message and the excluded users are kept. The scheduler of the development versions never switched anything and is dropped.
+
+Going back to 2.x is not supported: 2.x does not understand the new settings and treats every out of office reply as switched off.
 
 
 ## Contributing
@@ -38,7 +57,10 @@ Then you can clone this repo and then:
 
 ```bash
 npm install
+npm test
 rc-apps deploy
 ```
+
+`npm test` checks the period and migration logic in `src/outOfOffice`, which does not depend on Rocket.Chat.
 
 Follow the instructions and when you're done, the app will be installed on your Rocket.Chat server.

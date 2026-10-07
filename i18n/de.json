@@ -1,0 +1,5 @@
+{
+    "auto-reply-param-example": "[on <Deine Abwesenheitsnachricht (optional)> | off | status]",
+    "auto-reply-description": "Antwortet automatisch auf Direktnachrichten, während du abwesend bist",
+    "out-of-office-menu": "Abwesenheitsnotiz"
+}
