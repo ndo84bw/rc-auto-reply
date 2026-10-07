@@ -12,7 +12,8 @@ import { RoomType } from '@rocket.chat/apps-engine/definition/rooms';
 
 import { SlashCommand } from './src/slashCommand';
 import { UIActionButtonContext } from '@rocket.chat/apps-engine/definition/ui';
-import { IUIKitResponse, UIKitActionButtonInteractionContext, UIKitViewSubmitInteractionContext } from '@rocket.chat/apps-engine/definition/uikit';
+import { IUIKitResponse, UIKitActionButtonInteractionContext, UIKitBlockInteractionContext, UIKitViewSubmitInteractionContext } from '@rocket.chat/apps-engine/definition/uikit';
+import { HINT_ACTION_PREFIX, handleHintAction } from './src/hint/hint';
 import { OPEN_ACTION, VIEW_ID_PREFIX } from './src/dialog/outOfOfficeModal';
 import { outOfOfficeModalFor, submitOutOfOfficeDialog } from './src/dialog/outOfOfficeDialog';
 import { PostMessageSentHandler } from './src/handlers/postMessageSentHandler';
@@ -64,6 +65,13 @@ export class AutoReplyApp extends App implements IPostMessageSent {
     public async executeViewSubmitHandler(context: UIKitViewSubmitInteractionContext, read: IRead, http: IHttp, persistence: IPersistence, modify: IModify): Promise<IUIKitResponse> {
         if (context.getInteractionData().view.id.startsWith(VIEW_ID_PREFIX)) {
             return submitOutOfOfficeDialog(context, read, persistence);
+        }
+        return context.getInteractionResponder().successResponse();
+    }
+
+    public async executeBlockActionHandler(context: UIKitBlockInteractionContext, read: IRead, http: IHttp, persistence: IPersistence, modify: IModify): Promise<IUIKitResponse> {
+        if (context.getInteractionData().actionId.startsWith(HINT_ACTION_PREFIX)) {
+            return handleHintAction(this, context, read, persistence, modify);
         }
         return context.getInteractionResponder().successResponse();
     }

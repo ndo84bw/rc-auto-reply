@@ -1,5 +1,5 @@
 import { IHttp, IModify, IPersistence, IRead } from "@rocket.chat/apps-engine/definition/accessors";
-import { IMessage, IMessageAttachment, MessageActionButtonsAlignment, MessageActionType } from "@rocket.chat/apps-engine/definition/messages";
+import { IMessage } from "@rocket.chat/apps-engine/definition/messages";
 import { AutoReplyApp } from "../../AutoReplyApp";
 import { IUser } from "@rocket.chat/apps-engine/definition/users";
 import { sendMessage, sendNotifyMessage } from "../utils/helpers";
@@ -7,6 +7,7 @@ import { readOutOfOffice } from "../store";
 import { isActive } from "../outOfOffice/period";
 import { IOutOfOffice } from "../outOfOffice/types";
 import { readLastReplies, saveLastReply } from "../utils/lastReplies";
+import { claimHint, hintBlocks } from "../hint/hint";
 import { IReplyFrequency } from "../utils/IAutoReplySettings";
 
 export class PostMessageSentHandler{
@@ -30,7 +31,7 @@ export class PostMessageSentHandler{
     
         const MyAutoReplySettings = await readOutOfOffice(me.id, this.read, me.utcOffset);
         if (isActive(MyAutoReplySettings, now)) {
-            await this.handleMyAutoReply(MyAutoReplySettings, otherUser.id);
+            await this.handleMyAutoReply(MyAutoReplySettings, otherUser, now);
         }
     
         const OtherAutoReplySettings = await readOutOfOffice(otherUser.id, this.read, otherUser.utcOffset);
@@ -57,50 +58,12 @@ export class PostMessageSentHandler{
         return await this.read.getUserReader().getById(otherUserId);
     }
     
-    private async handleMyAutoReply(MyAutoReplySettings: IOutOfOffice, otherUserId: string): Promise<void> {
-        if (MyAutoReplySettings.excludedUserIds.includes(otherUserId)) return;
-    
-        const text = '`auto reply` is enabled. Would you like to disable it?';
-        const attachment = this.getMyAutoReplyAttachment(otherUserId);
-        await sendNotifyMessage(this.app, this.modify, this.message.room, this.message.sender, text, [attachment]);
-    }
-    
-    private getMyAutoReplyAttachment(otherUserId: string): IMessageAttachment {
-        return {
-            actionButtonsAlignment: MessageActionButtonsAlignment.HORIZONTAL,
-            actions: [
-                this.disableAutoReplyAction(),
-                this.disableAutoReplyForUserAction(otherUserId),
-                this.continueUsingAutoReplyAction(),
-            ],
-        } as IMessageAttachment;
-    }
-    
-    private disableAutoReplyAction(): any {
-        return {
-            text: 'Yes',
-            type: MessageActionType.BUTTON,
-            msg_in_chat_window: true,
-            msg: '/auto-reply disable',
-        };
-    }
-    
-    private disableAutoReplyForUserAction(userId: string): any {
-        return {
-            text: 'Disable for this user',
-            type: MessageActionType.BUTTON,
-            msg_in_chat_window: true,
-            msg: `/auto-reply remove-user ${userId}`,
-        };
-    }
-    
-    private continueUsingAutoReplyAction(): any {
-        return {
-            text: 'No',
-            type: MessageActionType.BUTTON,
-            msg_in_chat_window: true,
-            msg: '/auto-reply status',
-        };
+    private async handleMyAutoReply(MyAutoReplySettings: IOutOfOffice, otherUser: IUser, now: number): Promise<void> {
+        if (MyAutoReplySettings.excludedUserIds.includes(otherUser.id)) return;
+        if (!(await claimHint(this.message.sender, otherUser.id, now, this.read, this.persistence))) return;
+
+        const blocks = hintBlocks(MyAutoReplySettings, otherUser, now);
+        await sendNotifyMessage(this.app, this.modify, this.message.room, this.message.sender, undefined, undefined, blocks as any);
     }
     
     private async handleOtherUserAutoReply(OtherAutoReplySettings: IOutOfOffice, otherUser: IUser, me: IUser): Promise<void> {
