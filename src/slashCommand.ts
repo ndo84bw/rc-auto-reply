@@ -1,10 +1,13 @@
 import { IHttp, IModify, IPersistence, IRead } from '@rocket.chat/apps-engine/definition/accessors';
 import { ISlashCommand, SlashCommandContext } from '@rocket.chat/apps-engine/definition/slashcommands';
 
-import { statusText } from './outOfOffice/period';
+import { outOfOfficeModalFor } from './dialog/outOfOfficeDialog';
+import { endInstant, statusText } from './outOfOffice/period';
 import { IOutOfOffice } from './outOfOffice/types';
 import { readOutOfOffice, saveOutOfOffice } from './store';
 import { sendNotifyMessage } from './utils/helpers';
+
+const USAGE = '`/auto-reply` opens the settings. `/auto-reply on [message]` switches the out of office reply on from now, `/auto-reply off` switches it off, `/auto-reply status` shows it.';
 
 export class SlashCommand implements ISlashCommand {
     public command = 'auto-reply';
@@ -13,37 +16,40 @@ export class SlashCommand implements ISlashCommand {
     public providesPreview = false;
 
     public async executor(context: SlashCommandContext, read: IRead, modify: IModify, http: IHttp, persis: IPersistence): Promise<void> {
-        const args = context.getArguments();
+        const [action = '', ...words] = context.getArguments();
         const sender = context.getSender();
         const notify = (text: string) => sendNotifyMessage(undefined, modify, context.getRoom(), sender, text);
         const previous = await readOutOfOffice(sender.id, read, sender.utcOffset);
-        const save = (next: IOutOfOffice) => saveOutOfOffice(sender.id, previous, next, persis);
-        const status = (settings: IOutOfOffice) => `${statusText(settings, Date.now())}\n>${settings.message}`;
+        const status = (settings: IOutOfOffice) => `Out of office reply: ${statusText(settings, Date.now())}\n>${settings.message}`;
 
-        switch ((args[0] ?? '').toLowerCase()) {
-            case 'enable': {
-                const next: IOutOfOffice = { ...previous, enabled: true, start: undefined, message: args.slice(1).join(' ') || previous.message };
-                await save(next);
-                return notify('`auto reply` is enabled: ' + status(next));
+        switch (action.toLowerCase()) {
+            case '': {
+                const triggerId = context.getTriggerId();
+                if (!triggerId) {
+                    return notify(USAGE);
+                }
+                return modify.getUiController().openSurfaceView(await outOfOfficeModalFor(sender, read), { triggerId }, sender);
             }
+            case 'on':
+            case 'enable': {
+                // On from now: a first day set earlier would keep it waiting, a last day still to come stays
+                const endOver = previous.end !== undefined && endInstant(previous)! <= Date.now();
+                const next: IOutOfOffice = { ...previous, enabled: true, start: undefined, end: endOver ? undefined : previous.end, message: words.join(' ') || previous.message };
+                await saveOutOfOffice(sender.id, previous, next, persis);
+                return notify(status(next));
+            }
+            case 'off':
             case 'disable': {
                 const next: IOutOfOffice = { ...previous, enabled: false };
-                await save(next);
-                return notify('`auto reply` is disabled.');
+                await saveOutOfOffice(sender.id, previous, next, persis);
+                return notify(status(next));
             }
             case 'status':
-                return notify('`auto reply`: ' + status(previous));
-            case 'remove-user': {
-                const user = args[1] ? await read.getUserReader().getById(args[1]) : undefined;
-                if (!user) {
-                    return notify('usage: `/auto-reply remove-user UserId`');
-                }
-                const next: IOutOfOffice = { ...previous, excludedUserIds: [...new Set([...previous.excludedUserIds, user.id])] };
-                await save(next);
-                return notify('`auto reply` is disabled for: @' + user.username);
-            }
+                return notify(status(previous));
+            case 'remove-user':
+                return notify('People not to reply to are now set in the settings (`/auto-reply`), or with "Don\'t reply to" in the hint you get when writing while away.');
             default:
-                return notify('Only `enable`, `disable`, `remove-user` and `status` are accepted options for the first argument.');
+                return notify(USAGE);
         }
     }
 }
