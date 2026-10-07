@@ -1,4 +1,7 @@
 {
+    "scripts": {
+        "test": "node test/run.js"
+    },
     "devDependencies": {
         "@rocket.chat/apps-engine": "~1.47.0",
         "@rocket.chat/ui-kit": "~0.37.0",
