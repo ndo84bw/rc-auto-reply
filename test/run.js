@@ -16,6 +16,7 @@ for (const file of fs.readdirSync(src).filter((f) => f.endsWith('.ts'))) {
 }
 const period = require(path.join(out, 'period.js'));
 const { toOutOfOffice } = require(path.join(out, 'migrate.js'));
+const form = require(path.join(out, 'form.js'));
 
 let failed = 0;
 const test = (name, fn) => {
@@ -28,6 +29,7 @@ const test = (name, fn) => {
     }
 };
 const at = (iso) => Date.parse(iso);
+const settings0 = (overrides) => ({ version: 3, enabled: false, utcOffset: 2, message: 'away', replyFrequency: 'On Every Message', excludedUserIds: [], ...overrides });
 const settings = (overrides) => ({
     version: 3, enabled: true, utcOffset: 2, message: 'away', replyFrequency: 'On Every Message', excludedUserIds: [], ...overrides,
 });
@@ -134,6 +136,58 @@ test('nothing saved yet', () => {
     assert.deepEqual(toOutOfOffice(undefined, 1), { version: 3, enabled: false, utcOffset: 1, message: 'Hey, I received your message and will get back to you as soon as possible.', replyFrequency: 'On Every Message', excludedUserIds: [] });
 });
 
+const FREQUENCIES = ['On Every Message', 'Once', 'Once Per Hour', 'Once Per Day', 'Once Per Week', 'Once Per Month'];
+const NOW = at('2026-10-15T10:00:00Z');
+
+test('form: first opening has every field, radio "on" switches on', () => {
+    const state = {
+        enabled: { enabled: 'on' }, startDate: { startDate: '2026-10-20' }, startTime: { startTime: '' }, endDate: { endDate: '2026-10-24' },
+        endTime: { endTime: '18:00' }, message: { message: ' Bin weg ' }, replyFrequency: { replyFrequency: 'Once' },
+        excludedIds: { excludedIds: ['a', 'a', 'b'] }, addExcluded: { addExcluded: ['carl'] },
+    };
+    const { settings, addUsernames, errors } = form.readForm(state, 0, settings0(), 2, NOW, FREQUENCIES);
+    assert.deepEqual(errors, {});
+    assert.deepEqual(settings, { version: 3, enabled: true, start: { date: '2026-10-20' }, end: { date: '2026-10-24', time: '18:00' }, utcOffset: 2, message: 'Bin weg', replyFrequency: 'Once', excludedUserIds: ['a', 'b'] });
+    assert.deepEqual(addUsernames, ['carl']);
+});
+
+test('form: radio "off" switches off', () => {
+    const { settings } = form.readForm({ enabled: { enabled: 'off' } }, 0, settings0({ enabled: true }), 2, NOW, FREQUENCIES);
+    assert.equal(settings.enabled, false);
+});
+
+test('form: after a save, untouched fields keep what was saved, not older state', () => {
+    const saved = settings0({ enabled: true, end: { date: '2026-10-24' }, excludedUserIds: ['a', 'b'] });
+    const state = { endDate: { endDate: '2026-10-23', 'endDate.1': '2026-10-30' }, excludedIds: { excludedIds: ['a'] } };
+    const { settings } = form.readForm(state, 1, saved, 2, NOW, FREQUENCIES);
+    assert.deepEqual(settings.end, { date: '2026-10-30' });
+    assert.deepEqual(settings.excludedUserIds, ['a', 'b'], 'excluded users added in the last save must not get lost');
+    assert.equal(settings.enabled, true);
+});
+
+test('form: cleared fields count as empty, also after a save', () => {
+    const saved = settings0({ start: { date: '2026-10-20', time: '08:00' } });
+    const { settings } = form.readForm({ startDate: { 'startDate.2': '' }, startTime: { 'startTime.2': null } }, 2, saved, 2, NOW, FREQUENCIES);
+    assert.equal(settings.start, undefined);
+});
+
+test('form: field errors', () => {
+    const errors = (state) => form.readForm(state, 0, settings0(), 2, NOW, FREQUENCIES).errors;
+    assert.deepEqual(errors({ startTime: { startTime: '08:00' } }), { startTime: 'Please pick a day for this time.' });
+    assert.deepEqual(errors({ startDate: { startDate: '2026-10-20' }, endDate: { endDate: '2026-10-19' } }), { endDate: 'The period ends before it starts.' });
+    assert.deepEqual(errors({ message: { message: '  ' } }), { message: 'Please enter a message.' });
+    assert.deepEqual(errors({ enabled: { enabled: 'on' }, endDate: { endDate: '2026-10-14' } }), { endDate: 'This period has already ended.' });
+});
+
+test('form: unknown frequency keeps the saved one', () => {
+    assert.equal(form.readForm({ replyFrequency: { replyFrequency: 'Every second' } }, 0, settings0({ replyFrequency: 'Once' }), 2, NOW, FREQUENCIES).settings.replyFrequency, 'Once');
+});
+
+test('form: the generation from the client is only accepted as a small number', () => {
+    assert.deepEqual(['0', '3', '999999', '1e300', 'Infinity', '-1', '1.5', '', undefined, 7].map(form.generationOf), [0, 3, 999999, 0, 0, 0, 0, 0, 0, 0]);
+    assert.equal(form.actionIdOf('endDate', 0), 'endDate');
+    assert.equal(form.actionIdOf('endDate', 2), 'endDate.2');
+});
 
 fs.rmSync(out, { recursive: true, force: true });
 console.log(failed ? `\n${failed} failed` : '\nall passed');
