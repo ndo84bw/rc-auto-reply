@@ -57,7 +57,7 @@ export function createOutOfOfficeModal({ settings, now, utcOffset, excludedUsers
     const on = option('On', 'on');
     const off = option('Off', 'off');
     const blocks = [
-        { type: 'section', appId: APP_ID, text: { type: 'mrkdwn', text: saved ? `✅ *Saved.* ${status}` : `*Status:* ${status}` } },
+        { type: 'section', appId: APP_ID, text: { type: 'mrkdwn', text: saved ? `✅ *Saved.* Current status: ${status}` : `*Current status:* ${status}` } },
         { type: 'divider', appId: APP_ID },
         // A select, because in an input block 8.6.1 stores a checkbox click as a string and a radio label is not clickable
         input('enabled', 'Out of office reply', { type: 'static_select', options: [on, off], initialValue: settings.enabled ? 'on' : 'off' }),
