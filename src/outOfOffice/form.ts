@@ -18,14 +18,17 @@ export function generationOf(submitValue: unknown): number {
     return typeof submitValue === 'string' && /^\d{1,6}$/.test(submitValue) ? Number(submitValue) : 0;
 }
 
+/** Value of the time select for "no time": the period then starts or ends with the whole day */
+export const WHOLE_DAY = 'day';
+
 /** What the dialog shows for the saved settings */
 export function formValues(settings: IOutOfOffice): Record<FormField, unknown> {
     return {
         enabled: settings.enabled ? 'on' : 'off',
         startDate: settings.start?.date,
-        startTime: settings.start?.time,
+        startTime: settings.start?.time ?? WHOLE_DAY,
         endDate: settings.end?.date,
-        endTime: settings.end?.time,
+        endTime: settings.end?.time ?? WHOLE_DAY,
         message: settings.message,
         replyFrequency: settings.replyFrequency,
         excludedIds: settings.excludedUserIds,
@@ -59,7 +62,8 @@ export function readForm(state: FormState, generation: number, saved: IOutOfOffi
     const errors: Partial<Record<FormField, string>> = {};
     const dayTime = (dateField: FormField, timeField: FormField): IDayTime | undefined => {
         const date = text(value(dateField));
-        const time = text(value(timeField));
+        const picked = text(value(timeField));
+        const time = picked === WHOLE_DAY ? undefined : picked;
         if (date && !isValidDate(date)) {
             errors[dateField] = 'Please pick a valid date.';
         }

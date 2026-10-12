@@ -1,7 +1,7 @@
 import { IUIKitSurfaceViewParam } from '@rocket.chat/apps-engine/definition/accessors';
 import { UIKitSurfaceType } from '@rocket.chat/apps-engine/definition/uikit';
 
-import { actionIdOf, FormField } from '../outOfOffice/form';
+import { actionIdOf, FormField, WHOLE_DAY } from '../outOfOffice/form';
 import { statusText, utcOffsetLabel } from '../outOfOffice/period';
 import { IOutOfOffice } from '../outOfOffice/types';
 import { IReplyFrequency } from '../utils/IAutoReplySettings';
@@ -23,6 +23,20 @@ export const replyFrequencies = (): Array<string> => frequencies().map(([value])
 
 const plain = (text: string) => ({ type: 'plain_text', text, emoji: true });
 const option = (text: string, value: string) => ({ text: plain(text), value });
+
+const hour = (h: number) => `${String(h).padStart(2, '0')}:00`;
+
+/**
+ * Full hours as a select instead of a time picker: Firefox shows the picker with two clock icons.
+ * "Whole day" stands for no time, a saved time that is not a full hour stays selectable.
+ */
+const timeOptions = (wholeDay: string, first: boolean, saved?: string) => {
+    const hours = Array.from({ length: 23 }, (_, i) => hour(i + 1));
+    const times = saved && !hours.includes(saved) ? [...hours, saved].sort() : hours;
+    const day = option(wholeDay, WHOLE_DAY);
+    const options = times.map((time) => option(time, time));
+    return first ? [day, ...options] : [...options, day];
+};
 
 const inputOf = (generation: number) => (field: FormField, label: string, element: object, optional = false) => ({
     type: 'input',
@@ -63,10 +77,10 @@ export function createOutOfOfficeModal({ settings, now, utcOffset, excludedUsers
         input('enabled', 'Out of office reply', { type: 'static_select', options: [on, off], initialValue: settings.enabled ? 'on' : 'off' }),
         context('Replies are only sent while on and inside the period below.'),
         input('startDate', 'First day', { type: 'datepicker', initialDate: settings.start?.date, placeholder: plain('From now on') }, true),
-        input('startTime', 'From (time, optional)', { type: 'time_picker', initialTime: settings.start?.time }, true),
+        input('startTime', 'From', { type: 'static_select', options: timeOptions('Start of day (00:00)', true, settings.start?.time), initialValue: settings.start?.time ?? WHOLE_DAY }),
         input('endDate', 'Last day', { type: 'datepicker', initialDate: settings.end?.date, placeholder: plain('Until switched off') }, true),
-        input('endTime', 'Until (time, optional)', { type: 'time_picker', initialTime: settings.end?.time }, true),
-        context(`Leave the first day empty to start right away and the last day empty to keep it on until you switch it off. Without a time the whole day counts. Times are in ${utcOffsetLabel(utcOffset)}.`),
+        input('endTime', 'Until', { type: 'static_select', options: timeOptions('End of day (24:00)', false, settings.end?.time), initialValue: settings.end?.time ?? WHOLE_DAY }),
+        context(`Leave the first day empty to start right away and the last day empty to keep it on until you switch it off. Times are in ${utcOffsetLabel(utcOffset)}.`),
         { type: 'divider', appId: APP_ID },
         input('message', 'Message', { type: 'plain_text_input', multiline: true, initialValue: settings.message }),
         input('replyFrequency', 'Reply', {

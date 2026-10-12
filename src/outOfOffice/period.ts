@@ -69,7 +69,7 @@ export function utcOffsetLabel(utcOffset: number | undefined): string {
     return `UTC${offset < 0 ? '-' : '+'}${Math.floor(minutes / 60)}${rest ? `:${String(rest).padStart(2, '0')}` : ''}`;
 }
 
-/** e.g. "Fri, Oct 17" or "Fri, Oct 17, 6:00 PM", with the year when it is not the current one */
+/** e.g. "Fri, Oct 17" or "Fri, Oct 17, 18:00", with the year when it is not the current one */
 export function formatDayTime(day: IDayTime, now: number, utcOffset: number): string {
     const [year, month, date] = day.date.split('-').map(Number);
     const sameYear = year === Number(todayOnUserClock(now, utcOffset).slice(0, 4));
@@ -83,9 +83,8 @@ export function formatDayTime(day: IDayTime, now: number, utcOffset: number): st
     if (!day.time) {
         return text;
     }
-    const [hour, minute] = day.time.split(':').map(Number);
-    const time = new Date(Date.UTC(1970, 0, 1, hour, minute)).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' });
-    return `${text}, ${time}`;
+    // Stored as "HH:mm" on the user's clock, the same as the time select shows it
+    return `${text}, ${day.time}`;
 }
 
 /** e.g. "Mon, Oct 13 - Fri, Oct 17", "from Mon, Oct 13", "until Fri, Oct 17" or "from now on" */

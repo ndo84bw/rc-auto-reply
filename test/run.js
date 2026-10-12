@@ -81,9 +81,9 @@ test('status texts', () => {
     assert.equal(period.statusText(settings({ enabled: false, start: { date: '2026-10-01' }, end: { date: '2026-10-05' } }), now), 'Off', 'a period that is over is not offered');
     assert.equal(period.statusText(settings({}), now), 'Active, no end date');
     assert.equal(period.statusText(settings({ end: { date: '2026-10-17' } }), now), 'Active until Sat, Oct 17');
-    assert.equal(period.statusText(settings({ end: { date: '2026-10-17', time: '18:00' } }), now), 'Active until Sat, Oct 17, 6:00 PM');
+    assert.equal(period.statusText(settings({ end: { date: '2026-10-17', time: '18:00' } }), now), 'Active until Sat, Oct 17, 18:00');
     assert.equal(period.statusText(settings({ start: { date: '2026-10-20' }, end: { date: '2026-10-24' } }), now), 'Scheduled from Tue, Oct 20 until Sat, Oct 24');
-    assert.equal(period.statusText(settings({ start: { date: '2026-10-20', time: '12:00' } }), now), 'Scheduled from Tue, Oct 20, 12:00 PM, no end date');
+    assert.equal(period.statusText(settings({ start: { date: '2026-10-20', time: '12:00' } }), now), 'Scheduled from Tue, Oct 20, 12:00, no end date');
     assert.equal(period.statusText(settings({ end: { date: '2026-10-14' } }), now), 'Ended on Wed, Oct 14');
     assert.equal(period.statusText(settings({ start: { date: '2027-01-04' } }), now), 'Scheduled from Mon, Jan 4, 2027, no end date');
 });
@@ -141,7 +141,7 @@ const NOW = at('2026-10-15T10:00:00Z');
 
 test('form: first opening has every field, radio "on" switches on', () => {
     const state = {
-        enabled: { enabled: 'on' }, startDate: { startDate: '2026-10-20' }, startTime: { startTime: '' }, endDate: { endDate: '2026-10-24' },
+        enabled: { enabled: 'on' }, startDate: { startDate: '2026-10-20' }, startTime: { startTime: 'day' }, endDate: { endDate: '2026-10-24' },
         endTime: { endTime: '18:00' }, message: { message: ' Bin weg ' }, replyFrequency: { replyFrequency: 'Once' },
         excludedIds: { excludedIds: ['a', 'a', 'b'] }, addExcluded: { addExcluded: ['carl'] },
     };
@@ -149,6 +149,14 @@ test('form: first opening has every field, radio "on" switches on', () => {
     assert.deepEqual(errors, {});
     assert.deepEqual(settings, { version: 3, enabled: true, start: { date: '2026-10-20' }, end: { date: '2026-10-24', time: '18:00' }, utcOffset: 2, message: 'Bin weg', replyFrequency: 'Once', excludedUserIds: ['a', 'b'] });
     assert.deepEqual(addUsernames, ['carl']);
+});
+
+test('form: "whole day" in the time select means no time, also for a saved time', () => {
+    const saved = settings0({ start: { date: '2026-10-20', time: '08:00' }, end: { date: '2026-10-24' } });
+    assert.equal(form.formValues(saved).endTime, 'day');
+    const { settings } = form.readForm({ startTime: { startTime: 'day' } }, 0, saved, 2, NOW, FREQUENCIES);
+    assert.deepEqual(settings.start, { date: '2026-10-20' });
+    assert.deepEqual(settings.end, { date: '2026-10-24' });
 });
 
 test('form: radio "off" switches off', () => {
