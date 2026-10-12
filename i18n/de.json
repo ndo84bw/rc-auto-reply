@@ -1,0 +1,5 @@
+{
+    "auto-reply-param-example": "[on <Deine Abwesenheitsnachricht (optional)> | off | status | remove-user <Benutzername> | include-user <Benutzername> | frequency every|once|hour|day|week|month | mentions on|off]",
+    "auto-reply-description": "Antwortet automatisch auf Direktnachrichten (und Erwähnungen, wenn eingeschaltet), während du abwesend bist",
+    "out-of-office-menu": "Abwesenheitsnotiz"
+}

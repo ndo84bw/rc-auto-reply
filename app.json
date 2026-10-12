@@ -1,6 +1,6 @@
 {
     "id": "821cd5c6-1fb5-4d9e-8e88-e6176463efb6",
-    "version": "2.1.3",
+    "version": "3.0.0",
     "requiredApiVersion": "^1.36.0",
     "iconFile": "auto-reply.png",
     "author": {
@@ -11,7 +11,7 @@
     "name": "Auto-Reply",
     "nameSlug": "auto-reply",
     "classFile": "AutoReplyApp.ts",
-    "description": "Auto-reply allows users to automatically send customized messages in response to incoming texts.    With this app, users can set up personalized auto-responses to ensure that their contacts receive a prompt reply, even when they are not available to respond immediately.",
+    "description": "Out of office replies for Rocket.Chat: set a period with a first and last day in the user menu, and the app answers direct messages (and @mentions, if you like) while you are away.",
     "implements": [
         "IPostMessageSent"
     ],
@@ -48,6 +48,9 @@
         },
         {
             "name": "scheduler"
+        },
+        {
+            "name": "server-setting.read"
         }
     ]
 }
