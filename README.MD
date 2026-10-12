@@ -1,59 +1,59 @@
 # Rocket.Chat Auto-Reply App
 
-A [Rocket.Chat](https://rocket.chat) app that automatically answers incoming **direct messages** (and **@mentions** in channels, if enabled) with your personal away message — so your contacts get a prompt reply even when you are not available.
+A [Rocket.Chat](https://rocket.chat) app that answers incoming **direct messages** (and **@mentions** in channels, if you like) with your away message while you are out of office, so people writing to you know you won't answer soon.
 
 ## Features
 
-- **Custom away message** per user, sent under your own name as a message alias.
-- **Reply frequency** per conversation (new in 2.1.0):
-  - `every` — reply to every incoming message (default),
-  - `once` — reply only once per conversation until you re-enable auto-reply,
-  - `cooldown` — reply at most once every N hours (default 24, configurable).
-- **Exclusion list** — never auto-reply to selected users.
-- **Mention replies** (opt-in) — also auto-reply when you are @mentioned in channels/private groups.
-- **Schedulers** (new in 2.1.0) — enable/disable auto-reply automatically at set times (daily or per weekdays), with a configurable timezone.
-- **E2EE-safe** — in end-to-end encrypted rooms the app stays silent (see [limitations](#limitations)).
-- Localized UI/notifications in **English, Russian and Lithuanian** (follows the server language).
-- Gentler reminders: the "auto-reply is enabled, want to disable it?" prompt appears at most once per hour per conversation.
+- **Out of office period** from a first to a last day, each with an optional full hour. Without a time the whole day counts. Leave the first day empty to start right away and the last day empty to keep it on until you switch it off.
+- Replies only while switched on **and** inside the period, so a period can be prepared ahead and stays saved when switched off.
+- **Reply frequency**: on every message, once per person, or at most once per hour, day, week or month. It counts per absence: switching on again or setting a new period lets everyone get a reply again.
+- **People never to reply to**.
+- **Mention replies** (opt-in): also reply when you are @mentioned in channels and private groups.
+- Replies in the **thread** the message was written in.
+- **E2EE-safe**: in end-to-end encrypted rooms the app stays silent (see [limitations](#limitations)).
+- **English, German, Russian and Lithuanian**, following your own language setting, otherwise the server language.
 
 ## How to use it
 
-### From the room menu
+Open your user menu (your avatar) and choose **Out of Office**. The dialog shows the current status, for example "Active until Fri, Oct 17, 18:00" or "Off. When enabled: Mon, Oct 13 - Fri, Oct 17".
 
-From any direct-message contextual action menu, click the auto-reply button:
+- **Out of office reply** switches it on or off.
+- **First day** and **Last day** set the period.
+- **From** and **Until** narrow the first and last day to a full hour. "Start of day (00:00)" and "End of day (24:00)" mean the whole day. Times are in the UTC offset of your profile.
+- **Message**, **Reply** (how often), **Mentions in channels** and **Never reply to** set what is sent and to whom.
 
->![image](https://user-images.githubusercontent.com/29951360/220590790-fe8e20be-4ef4-9341-db014a46bc29.png)
+**Save** checks the input and shows "✅ Saved" with the new status, the dialog stays open.
 
-Enable the app, customize your message, pick a reply frequency, add schedulers or exclude users, then submit:
+When you write a direct message while your out of office reply is active, you get a hint at most once a day per conversation, with buttons to turn it off, not to reply to that person, or to open the settings.
 
->![image](https://user-images.githubusercontent.com/29951360/220591361-102a9950-6694-4baa-8875-2009a3474a39.png)
-
-When someone sends you a message they will get your auto-reply:
-
->![image](https://user-images.githubusercontent.com/29951360/220594523-c54ac5d2-98d1-4732-975f-44fca6aa3815.png)
-
-If you text a user while your auto-reply is enabled, you will get options to disable it (at most once per hour):
-
->![image](https://user-images.githubusercontent.com/29951360/220594822-f7820df6-5b4a-4123-9c3fee83fe3e.png)
-
-### Slash commands
+### Slash command
 
 ```
-/auto-reply enable [your away message]   enable (optionally set the message)
-/auto-reply disable                     disable
-/auto-reply status | list               show current settings
-/auto-reply remove-user <id|username>   stop auto-replying to a user
-/auto-reply include-user <id|username>  resume auto-replying to a user
-/auto-reply frequency every|once|cooldown [hours]
-/auto-reply mentions on|off             reply when mentioned in channels
-/auto-reply timezone +2                 scheduler timezone (e.g. -5, +5.5)
+/auto-reply                               open the dialog
+/auto-reply on [message]                  switch on from now, optionally with a new message
+/auto-reply off                           switch off, the period stays saved
+/auto-reply status                        show the status
+/auto-reply remove-user <username|id>     never reply to someone
+/auto-reply include-user <username|id>    reply to them again
+/auto-reply frequency every|once|hour|day|week|month
+/auto-reply mentions on|off               also reply to @mentions in channels
 ```
+
+`enable`, `disable` and `list` from 2.1 still work. `timezone` is gone: times follow the UTC offset of your profile.
 
 ## Limitations
 
-- **End-to-end encrypted (E2EE) rooms**: apps run server-side and cannot read or produce encrypted content. To avoid leaking plaintext into encrypted conversations, Auto-Reply does not reply in E2EE rooms at all (issue #8). Use regular DMs/channels.
-- **Schedulers override the manual toggle**: while a scheduler exists, the on/off state follows the schedule (recomputed every 5 minutes).
-- The exclusion list in the panel offers the users of the conversation you opened it from; use `remove-user`/`include-user` for anyone else.
+- **End-to-end encrypted (E2EE) rooms**: apps run server-side and cannot read or produce encrypted content. To avoid leaking plaintext into encrypted conversations, Auto-Reply does not reply in E2EE rooms at all (issue #8).
+- Only direct messages between two people get a reply, plus @mentions in channels and private groups if switched on.
+- Rocket.Chat only knows the UTC offset of your last login, not your time zone. A switch to or from daylight saving time before the period moves its start and end by an hour.
+
+## Upgrading
+
+From **2.1**: the message, the people never to reply to, the reply frequency and the mention setting are kept. A cooldown becomes the next longer fixed step (12 hours become once per day). The schedulers are gone: whoever had one starts switched off, because the schedulers switched on and off behind the user's back and the last state they left says nothing about now. The scheduler job of 2.1 is removed when the app starts.
+
+From **2.0**: an enabled auto-reply stays on without a period, the message and the excluded users are kept.
+
+Going back to 2.x is not supported: 2.x does not understand the new settings and treats every out of office reply as switched off.
 
 ## Local development
 
@@ -64,15 +64,18 @@ docker compose up -d          # start Rocket.Chat on http://localhost:3000
 ./dev/bootstrap.sh            # first-run: creates dev admin + test users (alice/bob/carol),
                               # disables email 2FA, enables E2EE, applies dev license patches
 npm install
+npm test                      # unit tests of the period, form, migration and reply logic
 npm run deploy                # build & deploy the app (rc-apps)
-python3 dev/test-suite.py     # REST regression suite (users: alice/bob, password Devpassword123!)
+python3 dev/test-suite.py     # REST regression suite (users: alice/bob/carol, password Devpassword123!)
 ```
 
 Notes:
 
 - The setup wizard cannot be completed headless/offline; log in once as `devadmin` (password `Devpassword123!`) if the browser redirects you to it and step through it, or keep using the API.
-- `dev/allow-private-apps.sh` patches the local container so private apps can be enabled/updated without an enterprise license — Rocket.Chat 8.x Community otherwise blocks locally deployed apps (`privateApps` license limit is 0). **Local development only**; real users install the published marketplace build.
-- `admin` is a reserved username in Rocket.Chat — the dev admin is `devadmin`.
+- `dev/allow-private-apps.sh` patches the local container so private apps can be enabled/updated without an enterprise license: Rocket.Chat 8.x Community otherwise blocks locally deployed apps (`privateApps` license limit is 0). **Local development only**; real users install the published marketplace build.
+- `admin` is a reserved username in Rocket.Chat, the dev admin is `devadmin`.
+- `dev/test-suite.py` also runs against another server, see the environment variables at its top.
+- The sources compile against apps-engine 1.36 (TypeScript 4.0) as well, which the marketplace build uses.
 
 ## Contributing
 
