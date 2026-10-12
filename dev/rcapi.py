@@ -17,12 +17,16 @@ Commands:
   setting <admin> <id> <value-json>     -> set a server setting
 """
 import json
+import os
 import sys
 import urllib.request
 import urllib.parse
 
-BASE = "http://localhost:3000"
-PASS = "Devpassword123!"
+# Defaults match docker-compose.yml and dev/bootstrap.sh; override to test another server
+BASE = os.environ.get("RC_URL", "http://localhost:3000")
+PASS = os.environ.get("RC_USERS_PASS", "Devpassword123!")
+ADMIN_USER = os.environ.get("RC_ADMIN_USER", "devadmin")
+ADMIN_PASS = os.environ.get("RC_ADMIN_PASS", "Devpassword123!")
 TOKENS = {}
 
 
@@ -50,7 +54,7 @@ def api(method, path, body=None, user=None):
 def login(user):
     if user in TOKENS:
         return TOKENS[user]
-    r = api("POST", "/api/v1/login", {"user": user, "password": PASS})
+    r = api("POST", "/api/v1/login", {"user": user, "password": ADMIN_PASS if user == ADMIN_USER else PASS})
     if not r.get("success"):
         raise SystemExit(f"login failed for {user}: {r}")
     TOKENS[user] = (r["data"]["userId"], r["data"]["authToken"])

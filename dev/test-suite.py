@@ -1,329 +1,276 @@
 #!/usr/bin/env python3
-"""Regression suite for the rc-auto-reply app against local Rocket.Chat.
+"""Regression suite for the rc-auto-reply app against a local Rocket.Chat.
 
 Prep: docker compose up, dev/bootstrap.sh, dev/allow-private-apps.sh,
-npm run deploy, users alice/bob exist (test users are created on demand).
+npm run deploy, users alice/bob exist (carol and a throwaway user are created on demand).
 
 Usage: python3 dev/test-suite.py
+
+Another server: RC_URL, RC_ADMIN_USER, RC_ADMIN_PASS, RC_USERS_PASS (see dev/rcapi.py),
+RC_ALICE, RC_BOB, RC_CAROL (usernames), MONGO_CONTAINER, MONGO_DB.
+
+The suite talks to the REST API like a client and reads and writes the app's
+records in MongoDB directly, to check what was stored and to set up states
+(a period, 2.1 settings) that would otherwise need the dialog.
 """
 import json
+import os
 import subprocess
 import sys
 import time
 
-sys.path.insert(0, 'dev')
-from rcapi import api, login, TOKENS  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rcapi import api, login, ADMIN_USER  # noqa: E402
 
-ALICE_ID = None
-ROOM_DM = None
+APP_ID = "821cd5c6-1fb5-4d9e-8e88-e6176463efb6"
+BOT = "auto-reply.bot"
+ALICE = os.environ.get("RC_ALICE", "alice")
+BOB = os.environ.get("RC_BOB", "bob")
+CAROL = os.environ.get("RC_CAROL", "carol")
+MONGO_CONTAINER = os.environ.get("MONGO_CONTAINER", "rc-auto-reply-mongo-1")
+MONGO_DB = os.environ.get("MONGO_DB", "rocketchat")
+# Long enough for the app to answer, short enough for a quick run
+SETTLE = float(os.environ.get("SETTLE_SECONDS", "3"))
+
+IDS = {}
 FAILURES = []
 PASSES = []
 
 
 def check(name, ok, detail=''):
     (PASSES if ok else FAILURES).append(name)
-    print(f"  {'PASS' if ok else 'FAIL'}: {name}" + (f" — {detail}" if detail and not ok else ''))
+    print(f"  {'PASS' if ok else 'FAIL'}: {name}" + (f" - {detail}" if detail != '' and not ok else ''))
 
 
-def cmd(user, params, room=None):
-    room = room or ROOM_DM
-    return api("POST", "/api/v1/commands.run", {"roomId": room, "command": "auto-reply", "params": params}, user)
+def retry(call, what):
+    """The REST API rate limit drops calls silently; retry until they succeed."""
+    for _ in range(40):
+        r = call()
+        if r.get("success"):
+            return r
+        time.sleep(3)
+    raise SystemExit(f"{what} kept failing: {r}")
+
+
+def cmd(user, room, params):
+    retry(lambda: api("POST", "/api/v1/commands.run", {"roomId": room, "command": "auto-reply", "params": params}, user), f"/auto-reply {params}")
 
 
 def say(user, room, text):
-    return api("POST", "/api/v1/chat.postMessage", {"roomId": room, "text": text}, user)
+    retry(lambda: api("POST", "/api/v1/chat.postMessage", {"roomId": room, "text": text}, user), "chat.postMessage")
+    time.sleep(SETTLE)
 
 
-SUITE_START_MS = int(time.time() * 1000)
+def mongo(js):
+    return subprocess.check_output(
+        ["docker", "exec", MONGO_CONTAINER, "mongosh", "--quiet", "--eval", js, MONGO_DB],
+    ).decode().strip()
 
 
-def count_bot_replies(room_id, since_ms=None):
-    """Count auto-reply.bot messages in a room since a timestamp (mongo, no window drift)."""
-    since = since_ms if since_ms is not None else SUITE_START_MS
-    out = subprocess.check_output([
-        "docker", "exec", "rc-auto-reply-mongo-1", "mongosh", "--quiet", "--eval",
-        f'db.rocketchat_message.countDocuments({{rid: "{room_id}", "u.username": "auto-reply.bot", ts: {{$gt: new Date({since})}}}})',
-        "rocketchat",
-    ]).decode().strip()
-    return int(out or 0)
+def replies(room, since_ms, alias=None):
+    """Messages of the app bot in a room since a moment, optionally only under one alias."""
+    query = {"rid": room, "u.username": BOT, "ts": {"$gt": f"__DATE__{since_ms}"}}
+    if alias:
+        query["alias"] = alias
+    js = json.dumps(query).replace(f'"__DATE__{since_ms}"', f"new Date({since_ms})")
+    return int(mongo(f"print(db.rocketchat_message.countDocuments({js}))") or 0)
 
 
-HISTORY_ERRORS = []
-
-def history(user, room, count=100):
-    r = api("GET", f"/api/v1/im.history?roomId={room}&count={count}", None, user)
-    msgs = r.get("messages")
-    if msgs is None:
-        HISTORY_ERRORS.append(str(r)[:120])
-        return None  # signal fetch failure
-    return msgs
+def now_ms():
+    return int(time.time() * 1000)
 
 
-def channel_history(user, room, count=100):
-    r = api("GET", f"/api/v1/channels.history?roomId={room}&count={count}", None, user)
-    msgs = r.get("messages")
-    if msgs is None:
-        HISTORY_ERRORS.append(str(r)[:120])
-        return None
-    return msgs
-
-
-def alice_settings():
-    """Read alice's persisted app settings directly from mongo."""
-    out = subprocess.check_output([
-        "docker", "exec", "rc-auto-reply-mongo-1", "mongosh", "--quiet", "--eval",
-        f"const p = db.rocketchat_apps_persistence.findOne({{'associations.0.id': '{ALICE_ID}'}}); print(p ? JSON.stringify(p.data) : 'null')",
-        "rocketchat",
-    ]).decode().strip()
+def settings_of(username):
+    out = mongo(
+        f"const p = db.rocketchat_apps_persistence.findOne({{appId: '{APP_ID}', associations: {{$size: 1}}, "
+        f"'associations.model': 'user', 'associations.id': '{IDS[username]}'}}); print(p ? JSON.stringify(p.data) : 'null')"
+    )
     return json.loads(out) if out and out != 'null' else None
 
 
-def auto_replies(msgs):
-    return [m for m in msgs if (m.get("alias") or "") == "Alice"]
+def records_of(username):
+    return int(mongo(f"print(db.rocketchat_apps_persistence.countDocuments({{appId: '{APP_ID}', 'associations.id': '{IDS[username]}'}}))"))
 
 
-def count_replies():
-    try:
-        return count_bot_replies(ROOM_DM)
-    except Exception as e:
-        print(f"  count_replies failed: {e}")
-        return -1
-
-
-def wait_for_replies(baseline, expected_more=1, timeout=90):
-    """Poll until at least `expected_more` new Alice-alias replies arrive."""
-    deadline = time.time() + timeout
-    last = baseline
-    while time.time() < deadline:
-        time.sleep(4)
-        last = count_replies()
-        if last - baseline >= expected_more:
-            break
-    return last
-
-
-def mongo_eval(js):
-    subprocess.run(
-        ["docker", "exec", "rc-auto-reply-mongo-1", "mongosh", "--quiet", "--eval", js, "rocketchat"],
-        check=True, capture_output=True,
+def write_settings(username, data, extra_records=()):
+    """Replaces everything the app stored under the user, e.g. with 2.1 settings and tracking records."""
+    uid = IDS[username]
+    docs = [{"associations": [{"model": "user", "id": uid}], "data": data}]
+    docs += [{"associations": [{"model": "user", "id": uid}, {"model": "room", "id": room}], "data": record} for room, record in extra_records]
+    js = "".join(
+        f"db.rocketchat_apps_persistence.insertOne({{_id: new ObjectId().toString(), appId: '{APP_ID}', _updatedAt: new Date(), "
+        f"associations: {json.dumps(d['associations'])}, data: {json.dumps(d['data'])}}});"
+        for d in docs
+    )
+    mongo(
+        f"db.rocketchat_apps_persistence.deleteMany({{appId: '{APP_ID}', 'associations.id': {{$in: ['{uid}', 'last-replies:{uid}', 'hint-shown:{uid}']}}}});" + js
     )
 
 
-def ensure_user(admin, username, name):
-    r = api("POST", "/api/v1/users.create", {
-        "username": username, "email": f"{username}@example.com", "name": name,
-        "password": "Devpassword123!", "roles": ["user"], "verified": True,
-    }, admin)
-    if not r.get("success") and "already" not in str(r.get("error", "")).lower():
-        print(f"  warning: could not ensure user {username}: {r}")
+def v3(enabled=True, **overrides):
+    return {"version": 3, "enabled": enabled, "utcOffset": 0, "message": f"{ALICE}-away", "replyFrequency": "On Every Message",
+            "replyToMentions": False, "excludedUserIds": [], **overrides}
 
 
-def user_id(admin, username):
-    r = api("GET", f"/api/v1/users.info?username={username}", None, admin)
-    return r.get("user", {}).get("_id")
+def day(offset_days):
+    return time.strftime("%Y-%m-%d", time.gmtime(time.time() + offset_days * 86400))
+
+
+def ensure_user(username):
+    r = api("GET", f"/api/v1/users.info?username={username}", None, ADMIN_USER)
+    if not r.get("success"):
+        api("POST", "/api/v1/users.create", {
+            "username": username, "email": f"{username}@example.com", "name": username.capitalize(),
+            "password": os.environ.get("RC_USERS_PASS", "Devpassword123!"), "roles": ["user"], "verified": True,
+        }, ADMIN_USER)
+        r = api("GET", f"/api/v1/users.info?username={username}", None, ADMIN_USER)
+    # New users would otherwise need an e-mail code to log in
+    mongo(f"db.users.updateOne({{username: '{username}'}}, {{$set: {{'services.email2fa.enabled': false}}}})")
+    return r["user"]["_id"]
 
 
 def main():
-    global ROOM_DM, ALICE_ID
-    for u in ["alice", "bob", "devadmin"]:
+    login(ADMIN_USER)
+    for u in (ALICE, BOB, CAROL):
+        IDS[u] = ensure_user(u)
         login(u)
-    r = api("GET", "/api/v1/users.info?username=alice", None, "devadmin")
-    ALICE_ID = r["user"]["_id"]
-    r = api("POST", "/api/v1/im.create", {"username": "bob"}, "alice")
-    ROOM_DM = r["room"]["_id"]
-    print(f"DM room: {ROOM_DM} (alice={ALICE_ID})")
+    dm = api("POST", "/api/v1/im.create", {"username": BOB}, ALICE)["room"]["_id"]
+    carol_dm = api("POST", "/api/v1/im.create", {"username": CAROL}, ALICE)["room"]["_id"]
+    alias = api("GET", f"/api/v1/users.info?username={ALICE}", None, ADMIN_USER)["user"].get("name") or ALICE
+    print(f"DM {ALICE}<->{BOB}: {dm}")
+    write_settings(BOB, v3(enabled=False))
 
-    # --- 1. DM happy path, frequency every ---
-    print("\n[1] DM auto-reply, frequency=every")
-    cmd("alice", "enable I am away rn")
-    cmd("alice", "frequency every")
-    base = count_replies()
-    say("bob", ROOM_DM, "test-1: every mode message A")
-    base = wait_for_replies(base, 1)
-    say("bob", ROOM_DM, "test-1: every mode message B")
-    after = wait_for_replies(base, 1)
-    check("every mode replies to both messages", after - base >= 2 or after >= base + 1, f"{base} -> {after}")
+    print("\n[1] Replies on every message, nothing while off")
+    write_settings(ALICE, v3())
+    t = now_ms()
+    say(BOB, dm, "hello 1")
+    say(BOB, dm, "hello 2")
+    check("replies to every message", replies(dm, t, alias) == 2, replies(dm, t, alias))
+    cmd(ALICE, dm, "off")
+    t = now_ms()
+    say(BOB, dm, "hello 3")
+    check("no reply while off", replies(dm, t) == 0)
+    cmd(ALICE, dm, "on Back on Monday")
+    s = settings_of(ALICE)
+    check("'on' switches on with the new message", s and s.get("enabled") is True and s.get("message") == "Back on Monday", s)
+    t = now_ms()
+    say(BOB, dm, "hello 4")
+    check("replies again after 'on'", replies(dm, t, alias) == 1)
 
-    # --- 2. frequency once ---
-    print("\n[2] frequency=once: one reply per enable period")
-    cmd("alice", "frequency once")
-    cmd("alice", "disable")
-    cmd("alice", "enable I am away rn")  # resets enabledAt
-    base = count_replies()
-    say("bob", ROOM_DM, "test-2: once mode message")
-    after = wait_for_replies(base, 1)
-    check("once mode replies to first message", after > base, f"{base} -> {after}")
-    say("bob", ROOM_DM, "test-2: once mode second message")
-    time.sleep(6)
-    final = count_replies()
-    check("once mode stays silent on second message", final == after, f"{after} -> {final}")
+    print("\n[2] Reply frequency")
+    cmd(ALICE, dm, "frequency once")
+    # 'once' counts per absence and Bob got a reply in this one already, so start a new one
+    cmd(ALICE, dm, "off")
+    cmd(ALICE, dm, "on")
+    t = now_ms()
+    say(BOB, dm, "once 1")
+    say(BOB, dm, "once 2")
+    check("'once' replies a single time", replies(dm, t, alias) == 1, replies(dm, t, alias))
+    cmd(ALICE, dm, "frequency hour")
+    t = now_ms()
+    say(BOB, dm, "hour 1")
+    check("'hour' does not reply within the hour", replies(dm, t, alias) == 0, "last reply was seconds ago")
+    mongo(f"db.rocketchat_apps_persistence.updateOne({{appId: '{APP_ID}', 'associations.id': 'last-replies:{IDS[ALICE]}'}}, "
+          f"{{$set: {{'data.replies.$[].lastMessage': new Date(Date.now() - 2 * 3600 * 1000).toISOString()}}}})")
+    t = now_ms()
+    say(BOB, dm, "hour 2")
+    check("'hour' replies again after an hour", replies(dm, t, alias) == 1)
+    cmd(ALICE, dm, "off")
+    cmd(ALICE, dm, "on")
+    t = now_ms()
+    say(BOB, dm, "after re-enable")
+    check("switching on again starts a new absence: replies right away", replies(dm, t, alias) == 1)
+    cmd(ALICE, dm, "frequency every")
 
-    # --- 3. cooldown ---
-    print("\n[3] frequency=cooldown")
-    cmd("alice", "frequency cooldown 24")
-    cmd("alice", "disable")
-    cmd("alice", "enable I am away rn")
-    base = count_replies()
-    say("bob", ROOM_DM, "test-3: cooldown message")
-    after = wait_for_replies(base, 1)
-    check("cooldown replies to first message", after > base, f"{base} -> {after}")
-    say("bob", ROOM_DM, "test-3: cooldown second message")
-    time.sleep(6)
-    blocked = count_replies()
-    check("cooldown blocks immediate second reply", blocked == after, f"{after} -> {blocked}")
-    # simulate expired cooldown by backdating lastReplyAt 25h
-    mongo_eval(
-        f"const p = db.rocketchat_apps_persistence.findOne({{associations: {{$all: "
-        f"[{{model:'user',id:'{ALICE_ID}'}},{{model:'room',id:'{ROOM_DM}'}}]}}}}); "
-        f"if (p) {{ p.data.lastReplyAt = Date.now() - 25*3600*1000; "
-        f"db.rocketchat_apps_persistence.replaceOne({{_id: p._id}}, p); }}"
-    )
-    say("bob", ROOM_DM, "test-3: cooldown expired message")
-    expired = wait_for_replies(blocked, 1)
-    check("cooldown replies again after interval passed", expired > blocked, f"{blocked} -> {expired}")
+    print("\n[3] Period")
+    write_settings(ALICE, v3(start={"date": day(1)}))
+    t = now_ms()
+    say(BOB, dm, "before the period")
+    check("no reply before the first day", replies(dm, t) == 0)
+    write_settings(ALICE, v3(start={"date": day(-2)}, end={"date": day(-1)}))
+    t = now_ms()
+    say(BOB, dm, "after the period")
+    check("no reply after the last day", replies(dm, t) == 0)
+    write_settings(ALICE, v3(start={"date": day(-1)}, end={"date": day(0)}))
+    t = now_ms()
+    say(BOB, dm, "during the period")
+    check("reply on the last day, which counts as a whole day", replies(dm, t, alias) == 1)
+    cmd(ALICE, dm, "on")
+    s = settings_of(ALICE)
+    check("'on' keeps a last day still to come and drops the first day", s and "start" not in s and s.get("end", {}).get("date") == day(0), s)
 
-    # --- 4. issue #9: deleted excluded user ---
-    print("\n[4] issue #9: deleted user in exclusion list")
-    ensure_user("devadmin", "carol", "Carol")
-    carol_id = user_id("devadmin", "carol")
-    cmd("alice", "frequency every")
-    cmd("alice", "disable")
-    cmd("alice", "enable I am away rn")
-    cmd("alice", f"remove-user {carol_id}")
-    s = alice_settings()
-    check("remove-user adds carol to exclusions", any(u and u.get("id") == carol_id for u in (s or {}).get("users", [])))
-    api("POST", "/api/v1/users.delete", {"userId": carol_id, "confirmRelinquish": True}, "devadmin")
-    say("bob", ROOM_DM, "test-4: after carol deleted")
-    time.sleep(5)
-    s = alice_settings()
-    check("settings readable after deleting excluded user", s is not None)
-    check("exclusion list has no null entries after self-heal", all(u for u in (s or {}).get("users", [])), str((s or {}).get("users")))
-    base = count_replies()
-    base = wait_for_replies(base, 0, timeout=1)  # noop read
-    say("bob", ROOM_DM, "test-4: reply works after deleting excluded user")
-    after = wait_for_replies(base, 1)
-    check("auto-reply still works after deleting excluded user", after > base, f"{base} -> {after}")
-    # recovery for users already affected: poison the record with null, then heal on read
-    mongo_eval(
-        f"const p = db.rocketchat_apps_persistence.findOne({{'associations.0.id': '{ALICE_ID}'}}); "
-        f"p.data.users = [null]; db.rocketchat_apps_persistence.replaceOne({{_id: p._id}}, p);"
-    )
-    cmd("alice", "list")  # used to throw on poisoned records
-    cmd("alice", "enable I am away rn")  # persists the healed settings
-    s = alice_settings()
-    check("poisoned exclusion list heals after next save", s is not None and all(u for u in s.get("users", [])), str((s or {}).get("users")))
-    base = count_replies()
-    say("bob", ROOM_DM, "test-4: after poison heal")
-    after = wait_for_replies(base, 1)
-    check("auto-reply works after self-heal", after > base, f"{base} -> {after}")
+    print("\n[4] People never to reply to")
+    write_settings(ALICE, v3())
+    cmd(ALICE, dm, f"remove-user @{BOB}")
+    check("remove-user stores the id", IDS[BOB] in (settings_of(ALICE) or {}).get("excludedUserIds", []))
+    t = now_ms()
+    say(BOB, dm, "excluded")
+    check("no reply to an excluded person", replies(dm, t) == 0)
+    cmd(ALICE, dm, f"include-user {BOB}")
+    t = now_ms()
+    say(BOB, dm, "included again")
+    check("reply again after include-user", replies(dm, t, alias) == 1)
+    temp = f"artemp{int(time.time()) % 100000}"
+    temp_id = ensure_user(temp)
+    cmd(ALICE, dm, f"remove-user {temp}")
+    api("POST", "/api/v1/users.delete", {"userId": temp_id, "confirmRelinquish": True}, ADMIN_USER)
+    t = now_ms()
+    say(BOB, dm, "after deleting an excluded user")
+    check("replies still work after an excluded user was deleted (issue #9)", replies(dm, t, alias) == 1)
+    cmd(ALICE, dm, "mentions off")
+    check("settings stay readable and saveable after that", (settings_of(ALICE) or {}).get("version") == 3)
 
-    # --- 5. exclusion works both ways ---
-    print("\n[5] exclude/include bob")
-    cmd("alice", "remove-user bob")
-    base = count_replies()
-    say("bob", ROOM_DM, "test-5: excluded message")
-    time.sleep(6)
-    after = count_replies()
-    check("no auto-reply for excluded user", after == base, f"{base} -> {after}")
-    cmd("alice", "include-user bob")
-    say("bob", ROOM_DM, "test-5: included again message")
-    after2 = wait_for_replies(after, 1)
-    check("auto-reply resumes after include-user", after2 > after, f"{after} -> {after2}")
+    print("\n[5] Mentions in channels")
+    channel = api("POST", "/api/v1/channels.create", {"name": f"ar-test-{int(time.time())}", "members": [ALICE, BOB]}, ADMIN_USER)["channel"]["_id"]
+    write_settings(ALICE, v3(replyToMentions=False))
+    t = now_ms()
+    say(BOB, channel, f"@{ALICE} are you there?")
+    check("no reply to a mention while mentions are off", replies(channel, t) == 0)
+    cmd(ALICE, dm, "mentions on")
+    cmd(ALICE, dm, "frequency once")
+    t = now_ms()
+    say(BOB, channel, f"@{ALICE} are you there?")
+    say(BOB, channel, f"@{ALICE} still?")
+    check("one reply to mentions with frequency 'once'", replies(channel, t, alias) == 1, replies(channel, t, alias))
+    t = now_ms()
+    say(BOB, channel, "no mention here, and @all")
+    check("no reply without a mention, @all does not count", replies(channel, t) == 0)
 
-    # --- 6. remove-user no longer force-enables ---
-    print("\n[6] remove-user keeps disabled state")
-    cmd("alice", "disable")
-    ensure_user("devadmin", "dave", "Dave")
-    cmd("alice", "remove-user dave")
-    s = alice_settings()
-    check("remove-user does not silently enable auto-reply", s is not None and s.get("on") is False, str(s and s.get("on")))
-    cmd("alice", "remove-user nonexistentuser")
-    s2 = alice_settings()
-    check("remove-user with bad id does not crash", s2 is not None)
+    print("\n[6] Two people away do not answer each other's replies")
+    write_settings(ALICE, v3())
+    write_settings(BOB, v3(message=f"{BOB}-away"))
+    t = now_ms()
+    say(BOB, dm, "both away")
+    time.sleep(SETTLE * 2)
+    check("exactly one reply, no ping-pong", replies(dm, t) == 1, replies(dm, t))
+    write_settings(BOB, v3(enabled=False))
 
-    # --- 7. mentions in channels (opt-in) ---
-    print("\n[7] mention replies in channels")
-    cmd("alice", "enable I am away rn")
-    r = api("POST", "/api/v1/channels.create", {"name": f"ar-test-{int(time.time())}"}, "bob")
-    ch = r["channel"]["_id"]
-    api("POST", "/api/v1/channels.invite", {"roomId": ch, "username": "alice"}, "bob")
-    say("bob", ch, "hello @alice without mentions enabled")
-    time.sleep(8)
-    ch_replies_count = count_bot_replies(ch)
-    check("no mention reply when mentions disabled", ch_replies_count == 0, str(ch_replies_count))
-    cmd("alice", "frequency once")
-    cmd("alice", "disable")
-    cmd("alice", "enable I am away rn")
-    cmd("alice", "mentions on", room=ch)
-    say("bob", ch, "hello @alice with mentions enabled")
-    deadline = time.time() + 90
-    first = 0
-    while time.time() < deadline:
-        time.sleep(4)
-        first = count_bot_replies(ch)
-        if first >= 1:
-            break
-    check("mention reply when mentions enabled", first == 1, str(first))
-    say("bob", ch, "again @alice second mention")
-    time.sleep(10)
-    second = count_bot_replies(ch)
-    check("mention reply respects frequency=once per channel", second == 1, str(second))
-    cmd("alice", "mentions off", room=ch)
+    print("\n[7] Settings of 2.1 are taken over")
+    users_21 = [None, {"id": IDS[CAROL], "username": CAROL}]
+    write_settings(ALICE, {"on": True, "message": "from 2.1", "users": users_21, "schedulers": [], "frequency": "cooldown", "cooldownHours": 12,
+                           "replyToMentions": True, "timezoneOffsetMinutes": 120, "enabledAt": now_ms()},
+                   extra_records=[(dm, {"lastReplyAt": now_ms(), "lastNotifyAt": now_ms()}), (carol_dm, {"lastReplyAt": 0})])
+    t = now_ms()
+    say(BOB, dm, "after the update")
+    check("2.1 settings with tracking records still reply", replies(dm, t, alias) == 1, "the tracking records must not be read as settings")
+    cmd(ALICE, dm, "status")
+    cmd(ALICE, dm, "frequency day")
+    s = settings_of(ALICE) or {}
+    check("saved in the version 3 format", s.get("version") == 3 and s.get("message") == "from 2.1", s)
+    check("mentions and exclusions carried over, null dropped", s.get("replyToMentions") is True and s.get("excludedUserIds") == [IDS[CAROL]], s)
+    check("2.1 tracking records are gone after a save", records_of(ALICE) == 1, records_of(ALICE))
+    write_settings(ALICE, {"on": True, "message": "with schedule", "users": [], "frequency": "every",
+                           "schedulers": [{"id": "s", "type": "Daily", "settings": {"enableTime": "11:00", "disableTime": "12:00"}}]})
+    t = now_ms()
+    say(BOB, dm, "scheduled user")
+    check("whoever had 2.1 schedulers starts switched off", replies(dm, t) == 0)
 
-    # --- 8. scheduler tick ---
-    print("\n[8] scheduler toggles auto-reply on/off")
-    cmd("alice", "disable")
-    cmd("alice", "timezone 0")
-    mongo_eval(
-        f"const p = db.rocketchat_apps_persistence.findOne({{'associations.0.id': '{ALICE_ID}'}}); "
-        f"p.data.schedulers = [{{id: 'test-daily', type: 'Daily', settings: {{enableTime: '00:00', disableTime: '23:59'}}}}]; "
-        f"db.rocketchat_apps_persistence.replaceOne({{_id: p._id}}, p);"
-    )
-    mongo_eval(
-        "const assoc = [{model:'misc',id:'auto-reply-scheduler-users'}]; "
-        "let reg = db.rocketchat_apps_persistence.findOne({associations: {$all: assoc}}); "
-        "if (!reg) { db.rocketchat_apps_persistence.insertOne({associations: assoc, appId: '821cd5c6-1fb5-4d9e-8e88-e6176463efb6', data: {userIds: []}}); reg = db.rocketchat_apps_persistence.findOne({associations: {$all: assoc}}); } "
-        f"if (reg.data.userIds.indexOf('{ALICE_ID}') === -1) {{ reg.data.userIds.push('{ALICE_ID}'); }} "
-        "db.rocketchat_apps_persistence.replaceOne({_id: reg._id}, reg);"
-    )
-    print("  waiting up to 7 min for the scheduler tick (window: 00:00-23:59 = active)...")
-    toggled_on = False
-    for _ in range(14):
-        time.sleep(30)
-        s = alice_settings()
-        if s and s.get("on") is True:
-            toggled_on = True
-            break
-    check("scheduler enables auto-reply in active window", toggled_on)
-    mongo_eval(
-        f"const p = db.rocketchat_apps_persistence.findOne({{'associations.0.id': '{ALICE_ID}'}}); "
-        f"p.data.schedulers = [{{id: 'test-daily', type: 'Daily', settings: {{enableTime: '01:00', disableTime: '01:30'}}}}]; "
-        f"db.rocketchat_apps_persistence.replaceOne({{_id: p._id}}, p);"
-    )
-    toggled_off = False
-    for _ in range(14):
-        time.sleep(30)
-        s = alice_settings()
-        if s and s.get("on") is False:
-            toggled_off = True
-            break
-    check("scheduler disables auto-reply outside window", toggled_off)
-    mongo_eval(
-        f"const p = db.rocketchat_apps_persistence.findOne({{'associations.0.id': '{ALICE_ID}'}}); "
-        f"p.data.schedulers = []; db.rocketchat_apps_persistence.replaceOne({{_id: p._id}}, p); "
-        f"const reg = db.rocketchat_apps_persistence.findOne({{associations: {{$all: [{{model:'misc',id:'auto-reply-scheduler-users'}}]}}}}); "
-        f"if (reg) {{ reg.data.userIds = reg.data.userIds.filter(id => id !== '{ALICE_ID}'); db.rocketchat_apps_persistence.replaceOne({{_id: reg._id}}, reg); }}"
-    )
-
-    # --- summary ---
-    print(f"\n=== {len(PASSES)} passed, {len(FAILURES)} failed ===")
-    if HISTORY_ERRORS:
-        print(f"  history fetch errors observed: {len(HISTORY_ERRORS)}")
-        for e in HISTORY_ERRORS[:5]:
-            print(f"    {e}")
-    for f in FAILURES:
-        print(f"  FAILED: {f}")
-    sys.exit(1 if FAILURES else 0)
+    write_settings(ALICE, v3(enabled=False))
+    print(f"\n{len(PASSES)} passed, {len(FAILURES)} failed")
+    if FAILURES:
+        for name in FAILURES:
+            print(f"  FAIL: {name}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
